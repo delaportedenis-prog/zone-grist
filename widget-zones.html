@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zones et entrées</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root {
+    --bg: #f3f5f2; --panel: #ffffff; --ink: #1d2b27; --muted: #66756f;
+    --line: #d5ddd8; --accent: #1f6f5c; --accent-soft: #e0f0ea; --off: #eef1ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151a18; --panel: #1e2522; --ink: #e6ede9; --muted: #98a8a1;
+            --line: #33403b; --accent: #5cc4a6; --accent-soft: #23372f; --off: #1a201e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 "Segoe UI", system-ui, sans-serif; }
+  #msg { color: var(--muted); padding: 24px; text-align: center; }
+  .zone { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+          margin-bottom: 12px; overflow: hidden; }
+  .zone > summary { list-style: none; cursor: pointer; display: flex; align-items: center;
+          gap: 10px; padding: 10px 14px; font-weight: 600; font-size: 15px;
+          border-bottom: 1px solid transparent; }
+  .zone[open] > summary { border-bottom-color: var(--line); }
+  .zone > summary::-webkit-details-marker { display: none; }
+  .zone > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+  .zone[open] > summary::before { transform: rotate(90deg); }
+  .count { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--accent);
+           background: var(--accent-soft); padding: 2px 10px; border-radius: 99px; }
+  .entry { display: flex; align-items: center; gap: 12px; padding: 8px 14px;
+           border-top: 1px solid var(--line); background: var(--off); transition: background .15s; }
+  .entry:first-of-type { border-top: 0; }
+  .entry.on { background: var(--panel); }
+  .entry label { flex: 1; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+  .entry:not(.on) .name { color: var(--muted); }
+  input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--accent); }
+  select { min-width: 150px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+           background: var(--panel); color: var(--ink); font: inherit; }
+  select:disabled { opacity: .45; }
+  select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div id="msg">Associez les colonnes dans le panneau de configuration du widget.</div>
+<div id="app"></div>
+
+<script>
+  // Colonnes attendues dans la table Grist :
+  //   Zone (Texte), Entree (Texte), Actif (Oui/Non),
+  //   Options (Texte, valeurs séparées par des virgules, facultatif), Valeur (Texte, facultatif)
+  grist.ready({
+    requiredAccess: 'full',
+    columns: [
+      { name: 'zone',    title: 'Zone',                 type: 'Text' },
+      { name: 'entree',  title: 'Entrée',               type: 'Text' },
+      { name: 'actif',   title: 'Ajoutée (Oui/Non)',    type: 'Bool' },
+      { name: 'options', title: 'Options du menu',      type: 'Text', optional: true },
+      { name: 'valeur',  title: 'Valeur choisie',       type: 'Text', optional: true }
+    ]
+  });
+
+  const app = document.getElementById('app');
+  const msg = document.getElementById('msg');
+  const ouvertes = new Set();   // zones dépliées (conservées entre les rafraîchissements)
+  let premiereFois = true;
+
+  grist.onRecords(function (records) {
+    const rows = grist.mapColumnNames(records);
+    if (!rows) { msg.style.display = ''; app.innerHTML = ''; return; }
+    msg.style.display = 'none';
+
+    const zones = new Map();
+    for (const r of rows) {
+      const z = r.zone || 'Sans zone';
+      if (!zones.has(z)) zones.set(z, []);
+      zones.get(z).push(r);
+    }
+    if (premiereFois) { zones.forEach((_, z) => ouvertes.add(z)); premiereFois = false; }
+
+    app.innerHTML = '';
+    for (const [nom, entrees] of zones) {
+      const det = document.createElement('details');
+      det.className = 'zone';
+      det.open = ouvertes.has(nom);
+      det.addEventListener('toggle', () => det.open ? ouvertes.add(nom) : ouvertes.delete(nom));
+
+      const nbActives = entrees.filter(e => e.actif).length;
+      const sum = document.createElement('summary');
+      sum.innerHTML = '<span></span><span class="count"></span>';
+      sum.children[0].textContent = nom;
+      sum.children[1].textContent = nbActives + ' / ' + entrees.length + ' ajoutée' + (nbActives > 1 ? 's' : '');
+      det.appendChild(sum);
+
+      for (const e of entrees) det.appendChild(ligne(e));
+      app.appendChild(det);
+    }
+  });
+
+  function ligne(e) {
+    const div = document.createElement('div');
+    div.className = 'entry' + (e.actif ? ' on' : '');
+
+    const lab = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!e.actif;
+    cb.addEventListener('change', () => {
+      grist.selectedTable.update({ id: e.id, fields: { actif: cb.checked } });
+    });
+    const nom = document.createElement('span');
+    nom.className = 'name';
+    nom.textContent = e.entree || '(sans nom)';
+    lab.append(cb, nom);
+    div.appendChild(lab);
+
+    const choix = (e.options || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (choix.length) {
+      const sel = document.createElement('select');
+      sel.disabled = !e.actif;
+      const vide = new Option('— choisir —', '');
+      sel.appendChild(vide);
+      for (const c of choix) sel.appendChild(new Option(c, c));
+      sel.value = choix.includes(e.valeur) ? e.valeur : '';
+      sel.addEventListener('change', () => {
+        grist.selectedTable.update({ id: e.id, fields: { valeur: sel.value } });
+      });
+      div.appendChild(sel);
+    }
+    return div;
+  }
+</script>
+</body>
+</html>
